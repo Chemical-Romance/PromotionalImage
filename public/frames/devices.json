@@ -1,0 +1,31 @@
+{
+  "devices": [
+    {
+      "id": "iphone-16-pro-max",
+      "name": "iPhone 16 Pro Max",
+      "note": "6.3 英寸",
+      "image": "/frames/iphone-16-pro-max.png",
+      "screen": { "x": 16, "y": 13, "w": 451, "h": 972, "radius": 50 },
+      "mode": "under",
+      "shadow": false
+    },
+    {
+      "id": "smart-phone",
+      "name": "Smart Phone",
+      "note": "13.6 英寸",
+      "image": "/frames/smart-phone.png",
+      "screen": { "x": 28, "y": 16, "w": 478, "h": 1043, "radius": 40 },
+      "mode": "under",
+      "shadow": false 
+    },
+    {
+      "id": "mac-air",
+      "name": "Mac Air",
+      "note": "13.6 英寸",
+      "image": "/frames/mac-air.png",
+      "screen": { "x": 99, "y": 27, "w": 1081, "h": 699, "radius": 0 },
+      "mode": "under",
+      "shadow": false
+    }
+  ]
+}

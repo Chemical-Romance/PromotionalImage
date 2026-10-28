@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.edge-*/
+shot*.png
+design-*.png
+downloads/
+mock-shot*.png
+debug*.mjs
