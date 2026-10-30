@@ -50,7 +50,6 @@ export const GRADIENTS: GradientPreset[] = [
   { id: 'lavender', name: '薰衣草', from: '#E0C3FC', to: '#8EC5FC', angle: 150 },
   { id: 'sunrise', name: '日出', from: '#FA709A', to: '#FEE140', angle: 150 },
   { id: 'deepocean', name: '深海蓝', from: '#000428', to: '#004E92', angle: 160 },
-  { id: 'mango', name: '芒果', from: '#F09819', to: '#FF512F', angle: 150 },
   { id: 'haze', name: '雾霭', from: '#B8C6DB', to: '#4A5568', angle: 150 },
 ];
 
@@ -201,6 +200,8 @@ export function resolveTextStyle(slide: Slide, project: Project) {
     textColor: slide.textColor ?? project.textColor,
     titleScale: slide.titleScale ?? project.titleScale,
     subtitleScale: slide.subtitleScale ?? project.subtitleScale,
+    textOffset: slide.textOffset ?? project.textOffset,
+    textAreaW: slide.textAreaW ?? project.textAreaW,
   };
 }
 

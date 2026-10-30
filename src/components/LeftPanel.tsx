@@ -307,28 +307,41 @@ export function LeftPanel({
           />
 
           {slide.bg.type === 'gradient' ? (
-            <div className="gradient-grid">
-              {GRADIENTS.map((g) => (
-                <button
-                  key={g.id}
-                  type="button"
-                  className={`gradient-card ${slide.bg.gradient === g.id ? 'on' : ''}`}
-                  onClick={() => {
-                    onSlide({ bg: { ...slide.bg, gradient: g.id, type: 'gradient' } });
+            <>
+              <div className="gradient-grid">
+                {GRADIENTS.map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    className={`gradient-card ${slide.bg.gradient === g.id ? 'on' : ''}`}
+                    onClick={() => {
+                      onSlide({ bg: { ...slide.bg, gradient: g.id, type: 'gradient' } });
+                      onSlide({
+                        textColor: pickTextForBg('gradient', g.id, g.from, resolveTextStyle(slide, project).textPos),
+                      });
+                    }}
+                    title={g.name}
+                  >
+                    <span
+                      className="gradient-bar"
+                      style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
+                    />
+                    <span className="gradient-name">{g.name}</span>
+                  </button>
+                ))}
+                <GradientCustomCard
+                  current={slide.bg.gradient}
+                  onApply={(from, to, angle) => {
+                    const val = `linear-gradient(${angle}deg, ${from}, ${to})`;
+                    onSlide({ bg: { ...slide.bg, gradient: val, type: 'gradient' } });
+                    // 用 from 颜色估一个文字颜色
                     onSlide({
-                      textColor: pickTextForBg('gradient', g.id, g.from, resolveTextStyle(slide, project).textPos),
+                      textColor: pickTextForBg('gradient', val, from, resolveTextStyle(slide, project).textPos),
                     });
                   }}
-                  title={g.name}
-                >
-                  <span
-                    className="gradient-bar"
-                    style={{ background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})` }}
-                  />
-                  <span className="gradient-name">{g.name}</span>
-                </button>
-              ))}
-            </div>
+                />
+              </div>
+            </>
           ) : null}
 
           {slide.bg.type === 'solid' ? (
@@ -515,6 +528,39 @@ export function LeftPanel({
                   display={`${Math.round(t.subtitleScale * 100)}%`}
                   onChange={(v) => onSlide({ subtitleScale: v })}
                 />
+                <Range
+                  label="水平偏移"
+                  value={t.textOffset?.x ?? 0}
+                  min={-0.3}
+                  max={0.3}
+                  step={0.01}
+                  display={`${Math.round((t.textOffset?.x ?? 0) * 100)}%`}
+                  onChange={(v) =>
+                    onSlide({ textOffset: { x: v, y: t.textOffset?.y ?? 0 } })
+                  }
+                />
+                <Range
+                  label="垂直偏移"
+                  value={t.textOffset?.y ?? 0}
+                  min={-0.3}
+                  max={0.3}
+                  step={0.01}
+                  display={`${Math.round((t.textOffset?.y ?? 0) * 100)}%`}
+                  onChange={(v) =>
+                    onSlide({ textOffset: { x: t.textOffset?.x ?? 0, y: v } })
+                  }
+                />
+                {t.textPos === 'side' && (
+                  <Range
+                    label="文字区宽度"
+                    value={t.textAreaW ?? 0.42}
+                    min={0.2}
+                    max={0.6}
+                    step={0.01}
+                    display={`${Math.round((t.textAreaW ?? 0.42) * 100)}%`}
+                    onChange={(v) => onSlide({ textAreaW: v })}
+                  />
+                )}
               </>
             );
           })()}
@@ -730,5 +776,122 @@ function DeviceGlyph({ frame }: { frame: string }): ReactNode {
         />
       ) : null}
     </svg>
+  );
+}
+
+/** 从 gradient 字段（预设 id 或 linear-gradient 字符串）反解 from/to/angle */
+function parseGradient(current: string | undefined): { from: string; to: string; angle: number; isCustom: boolean } {
+  const PRESET_FALLBACK = { from: '#5B5BF0', to: '#9D5CF5', angle: 150, isCustom: false as const };
+  if (!current) return PRESET_FALLBACK;
+  const preset = GRADIENTS.find((g) => g.id === current);
+  if (preset) return { from: preset.from, to: preset.to, angle: preset.angle, isCustom: false };
+  const m = current.match(/linear-gradient\(\s*(\d+(?:\.\d+)?)deg\s*,\s*([^,]+)\s*,\s*([^)]+)\)/);
+  if (m) return { angle: parseFloat(m[1]), from: m[2].trim(), to: m[3].trim(), isCustom: true };
+  return PRESET_FALLBACK;
+}
+
+function GradientCustomCard({
+  current,
+  onApply,
+}: {
+  current: string | undefined;
+  onApply: (from: string, to: string, angle: number) => void;
+}): ReactNode {
+  const parsed = parseGradient(current);
+  const [open, setOpen] = useState(parsed.isCustom);
+  const [from, setFrom] = useState(parsed.from);
+  const [to, setTo] = useState(parsed.to);
+  const [angle, setAngle] = useState(parsed.angle);
+
+  // 当外部 current 变化时同步内部状态
+  useEffect(() => {
+    const p = parseGradient(current);
+    setFrom(p.from);
+    setTo(p.to);
+    setAngle(p.angle);
+  }, [current]);
+
+  const trigger = (label: string, preview: boolean) => {
+    if (!preview) {
+      return (
+        <button
+          type="button"
+          className={`gradient-card gradient-custom-trigger ${parsed.isCustom ? 'on' : ''}`}
+          onClick={() => setOpen(!open)}
+          title={label}
+        >
+          <span className="gradient-bar gradient-custom-bar">
+            <span
+              className="gradient-custom-preview-inner"
+              style={{ background: `linear-gradient(${angle}deg, ${from}, ${to})` }}
+            />
+            <span className="custom-plus">+</span>
+          </span>
+          <span className="gradient-name">自定义渐变</span>
+        </button>
+      );
+    }
+    return null;
+  };
+
+  if (!open) {
+    return trigger('自定义渐变', false);
+  }
+
+  return (
+    <div className="gradient-custom">
+      <div className="gradient-custom-header">
+        <span className="gradient-custom-title">自定义渐变</span>
+        <button
+          type="button"
+          className="gradient-custom-close"
+          onClick={() => setOpen(false)}
+          aria-label="收起"
+        >×</button>
+      </div>
+      <div
+        className="gradient-custom-preview"
+        style={{ background: `linear-gradient(${angle}deg, ${from}, ${to})` }}
+      />
+      <div className="gradient-custom-row">
+        <label className="gradient-custom-input">
+          <span>起始</span>
+          <input
+            type="color"
+            value={/^#[0-9a-f]{6}$/i.test(from) ? from : '#5B5BF0'}
+            onChange={(e) => setFrom(e.target.value)}
+          />
+        </label>
+        <label className="gradient-custom-input">
+          <span>结束</span>
+          <input
+            type="color"
+            value={/^#[0-9a-f]{6}$/i.test(to) ? to : '#9D5CF5'}
+            onChange={(e) => setTo(e.target.value)}
+          />
+        </label>
+      </div>
+      <div className="gradient-custom-row">
+        <label className="gradient-custom-angle">
+          <span>角度</span>
+          <input
+            type="range"
+            min={0}
+            max={360}
+            step={1}
+            value={angle}
+            onChange={(e) => setAngle(parseInt(e.target.value, 10))}
+          />
+          <span className="gradient-custom-angle-val">{angle}°</span>
+        </label>
+      </div>
+      <button
+        type="button"
+        className="btn btn-primary gradient-custom-apply"
+        onClick={() => onApply(from, to, angle)}
+      >
+        应用
+      </button>
+    </div>
   );
 }

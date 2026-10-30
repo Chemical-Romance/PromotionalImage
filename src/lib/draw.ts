@@ -34,6 +34,7 @@ interface TextLayout {
   titleLines: string[];
   subLines: string[];
   height: number;
+  width: number;
   x: number;
   y: number;
   align: 'center' | 'left';
@@ -121,16 +122,36 @@ function drawBackground(
     ctx.fillStyle = '#12141b';
     ctx.fillRect(0, 0, W, H);
   } else {
-    const preset = GRADIENTS.find((g) => g.id === bg.gradient) ?? GRADIENTS[0];
-    const rad = (preset.angle * Math.PI) / 180;
+    // 支持预设 id（如 "indigo"）和自定义 CSS linear-gradient 字符串
+    let from: string, to: string, angle: number;
+    const preset = GRADIENTS.find((g) => g.id === bg.gradient);
+    if (preset) {
+      from = preset.from;
+      to = preset.to;
+      angle = preset.angle;
+    } else {
+      // 解析 "linear-gradient(135deg, #9B141E, #F6B8BC)" 格式
+      const m = (bg.gradient || '').match(/linear-gradient\(\s*(\d+(?:\.\d+)?)deg\s*,\s*([^,]+)\s*,\s*([^)]+)\)/);
+      if (m) {
+        angle = parseFloat(m[1]);
+        from = m[2].trim();
+        to = m[3].trim();
+      } else {
+        // 兜底：用第一个预设
+        from = GRADIENTS[0].from;
+        to = GRADIENTS[0].to;
+        angle = GRADIENTS[0].angle;
+      }
+    }
+    const rad = (angle * Math.PI) / 180;
     const cx = W / 2;
     const cy = H / 2;
     const len = Math.abs(W * Math.cos(rad)) + Math.abs(H * Math.sin(rad));
     const dx = (Math.cos(rad) * len) / 2;
     const dy = (Math.sin(rad) * len) / 2;
     const grad = ctx.createLinearGradient(cx - dx, cy - dy, cx + dx, cy + dy);
-    grad.addColorStop(0, preset.from);
-    grad.addColorStop(1, preset.to);
+    grad.addColorStop(0, from);
+    grad.addColorStop(1, to);
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
   }
@@ -149,7 +170,7 @@ function drawBackground(
   }
 }
 
-function computeTextLayout(
+export function computeTextLayout(
   ctx: CanvasRenderingContext2D,
   W: number,
   H: number,
@@ -170,9 +191,12 @@ function computeTextLayout(
   const subSize = Math.round(
     (side ? W * 0.023 : W * 0.033) * t.subtitleScale,
   );
+
+  // 可配置的文字区域
+  const areaW = t.textAreaW ?? (side ? 0.42 : 0.84);
   const columnX = W * 0.058;
-  const columnW = W * 0.42;
-  const maxW = side ? columnW : W * 0.84;
+  const columnW = W * areaW;
+  const maxW = side ? columnW : W * areaW;
 
   ctx.font = `800 ${titleSize}px ${family}`;
   const titleLines = title ? wrapText(ctx, title, maxW) : [];
@@ -186,20 +210,26 @@ function computeTextLayout(
   const subLH = subSize * 1.5;
   const gap = titleLines.length && subLines.length ? subSize * 0.95 : 0;
   const height = titleLines.length * titleLH + gap + subLines.length * subLH;
-  const y = side
-    ? H / 2 - height / 2
-    : t.textPos === 'top'
-      ? H * 0.062
-      : Math.max(H * 0.02, H * 0.938 - height);
-
   const centered = t.align === 'center';
-  const x = side
-    ? centered
-      ? columnX + columnW / 2
-      : columnX
-    : centered
-      ? W / 2
-      : W * 0.08;
+
+  // 基础位置
+  let baseX: number, baseY: number;
+  if (side) {
+    baseX = centered ? columnX + columnW / 2 : columnX;
+    baseY = H / 2 - height / 2;
+  } else if (t.textPos === 'top') {
+    baseX = centered ? W / 2 : W * 0.08;
+    baseY = H * 0.062;
+  } else {
+    baseX = centered ? W / 2 : W * 0.08;
+    baseY = Math.max(H * 0.02, H * 0.938 - height);
+  }
+
+  // 应用用户手动偏移
+  const ox = (t.textOffset?.x ?? 0) * W;
+  const oy = (t.textOffset?.y ?? 0) * H;
+  const x = baseX + ox;
+  const y = baseY + oy;
 
   return {
     titleSize,
@@ -210,6 +240,7 @@ function computeTextLayout(
     titleLines,
     subLines,
     height,
+    width: maxW,
     x,
     y,
     align: centered ? 'center' : 'left',
@@ -313,10 +344,13 @@ function computeDeviceRect(
     let bottomLimit: number;
     if (t.textPos === 'top') {
       topLimit = text.y + text.height + H * 0.05;
-      bottomLimit = H * 0.985;
+      // 原 H*0.985 几乎贴到底部，设备视觉上沉在画布下沿；
+      // 上移到 H*0.88，给设备底部留出 12% 画布高度的呼吸空间。
+      bottomLimit = H * 0.93;
     } else {
+      // textPos === 'bottom'
       topLimit = H * 0.015;
-      bottomLimit = text.y - H * 0.05;
+      bottomLimit = text.y - H * 0.10;
     }
     const availH = Math.max(H * 0.18, bottomLimit - topLimit);
     const dw = Math.min(baseCap, availH * model.ratio);

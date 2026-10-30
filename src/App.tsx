@@ -21,6 +21,7 @@ import { CanvasStage } from './components/CanvasStage';
 import { SlideStrip } from './components/SlideStrip';
 import { RightPanel } from './components/RightPanel';
 import { FrameImporter } from './components/FrameImporter';
+import { AIAgent } from './components/AIAgent';
 
 export default function App(): ReactNode {
   const STORAGE_KEY = 'promo-project-v1';
@@ -42,9 +43,10 @@ export default function App(): ReactNode {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [customDevices, setCustomDevices] = useState<DeviceDef[]>([]);
+  const [customDevices, setCustomDevices] = useState<DeviceDef[] | null>(null);
   const [importerOpen, setImporterOpen] = useState(false);
   const [canvasOpen, setCanvasOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const toastTimer = useRef<number | undefined>(undefined);
 
   // History stack for undo/redo
@@ -141,13 +143,11 @@ export default function App(): ReactNode {
   }, [undo, redo]);
 
   const devices = useMemo(() => {
-    const overrides = new Map(customDevices.map((device) => [device.id, device]));
-    const merged = DEVICES.map((device) => overrides.get(device.id) ?? device);
-    const builtInIds = new Set(DEVICES.map((device) => device.id));
-    for (const device of customDevices) {
-      if (!builtInIds.has(device.id)) merged.push(device);
-    }
-    return merged;
+    // customDevices 为 null 表示尚未加载完成（首屏加载门控）。
+    // 加载完成后：有自定义列表用自定义列表，否则 fallback 到内置 DEVICES。
+    if (customDevices === null) return DEVICES;
+    if (customDevices.length > 0) return customDevices;
+    return DEVICES;
   }, [customDevices]);
 
   useEffect(
@@ -160,7 +160,40 @@ export default function App(): ReactNode {
   useEffect(() => {
     let alive = true;
     loadCustomFrameDevices().then((list) => {
-      if (alive && list.length > 0) setCustomDevices(list);
+      if (!alive) return;
+      if (list.length === 0) {
+        // 没有 devices.json 或解析失败：标记加载完成，保留内置 DEVICES
+        setCustomDevices([]);
+        return;
+      }
+      // 原子性地设置设备列表 + 修正默认设备，避免首屏闪一下
+      setCustomDevices(list);
+      setProject((prev) => {
+        const firstId = list[0].id;
+        let changed = false;
+        const slides = prev.slides.map((s) => {
+          const slots = s.devices ?? prev.devices ?? [];
+          if (
+            slots.length === 1 &&
+            slots[0].device === 'iphone15' &&
+            !s.deviceStates?.[slots[0].device]
+          ) {
+            changed = true;
+            return { ...s, devices: [{ ...slots[0], device: firstId }] };
+          }
+          return s;
+        });
+        const projectDevices = prev.devices?.map((d) =>
+          d.device === 'iphone15' && prev.devices!.length === 1
+            ? { ...d, device: firstId }
+            : d,
+        );
+        if (projectDevices?.some((d) => d.device === firstId) || slides.some((s, i) => s !== prev.slides[i])) {
+          changed = true;
+        }
+        if (!changed) return prev;
+        return { ...prev, devices: projectDevices, slides };
+      });
     });
     return () => {
       alive = false;
@@ -168,7 +201,7 @@ export default function App(): ReactNode {
   }, []);
 
   const addCustomDevice = (device: DeviceDef) => {
-    setCustomDevices((prev) => [...prev.filter((item) => item.id !== device.id), device]);
+    setCustomDevices((prev) => [...(prev ?? []).filter((item) => item.id !== device.id), device]);
     setProject((prev) => ({ ...prev, device: device.id }));
     setImporterOpen(false);
     showToast(`已添加「${device.name}」`);
@@ -331,23 +364,45 @@ export default function App(): ReactNode {
         if (index < 0) return prev;
         const base = prev.slides[index];
         const next = [...prev.slides];
-        next[index] = { ...base, screenshot: accepted[0] };
 
-        const extras: Slide[] = accepted.slice(1).map((src) =>
-          createSlide({
-            bg: { ...base.bg },
-            fit: base.fit,
-            screenshot: src,
-            illustrations: base.illustrations.map((el) => ({ ...el, id: uid() })),
-            deviceX: base.deviceX ?? 0,
-            deviceY: base.deviceY ?? 0,
-            deviceScale: base.deviceScale ?? 1,
-            overlayDevice: base.overlayDevice
-              ? { ...base.overlayDevice }
-              : undefined,
-          }),
-        );
-        next.splice(index + 1, 0, ...extras);
+        // Route the screenshot into the 1st device's state (multi-device era).
+        const slots = resolveDevices(base, prev);
+        const firstSlot = slots[0];
+        const firstSlotId = firstSlot?.id;
+        const firstSlotIndex = slots.findIndex((s) => s.id === firstSlotId);
+        const firstSlotBase = firstSlotId
+          ? getDeviceState(base, firstSlotId, Math.max(0, firstSlotIndex))
+          : undefined;
+
+        if (firstSlotId && firstSlotBase) {
+          next[index] = {
+            ...base,
+            deviceStates: {
+              ...(base.deviceStates ?? {}),
+              [firstSlotId]: { ...firstSlotBase, screenshot: accepted[0] },
+            },
+          };
+
+          const extras: Slide[] = accepted.slice(1).map((src) => {
+            const extraBase = firstSlotBase;
+            return createSlide({
+              bg: { ...base.bg },
+              illustrations: base.illustrations.map((el) => ({ ...el, id: uid() })),
+              devices: base.devices ? base.devices.map((d) => ({ ...d })) : undefined,
+              deviceStates: {
+                ...(base.deviceStates ?? {}),
+                [firstSlotId]: { ...extraBase, screenshot: src },
+              },
+              textPos: base.textPos,
+              align: base.align,
+              font: base.font,
+              textColor: base.textColor,
+              titleScale: base.titleScale,
+              subtitleScale: base.subtitleScale,
+            });
+          });
+          next.splice(index + 1, 0, ...extras);
+        }
         return { ...prev, slides: next };
       });
 
@@ -398,31 +453,41 @@ export default function App(): ReactNode {
           // 第一台设备多选：生成多页
           const room = Math.max(0, 10 - prev.slides.length);
           const accepted = srcs.slice(0, 1 + room);
+          const slotBase = getDeviceState(base, slotId, slotIndex);
           next[index] = {
             ...base,
             deviceStates: {
               ...(base.deviceStates ?? {}),
-              [slotId]: { ...(base.deviceStates?.[slotId] ?? {}), screenshot: accepted[0] },
+              [slotId]: { ...slotBase, screenshot: accepted[0] },
             },
           };
-          const extras: Slide[] = accepted.slice(1).map((src) =>
-            createSlide({
+          const extras: Slide[] = accepted.slice(1).map((src) => {
+            const extraBase = slotBase;
+            return createSlide({
               bg: { ...base.bg },
               illustrations: base.illustrations.map((el) => ({ ...el, id: uid() })),
+              devices: base.devices ? base.devices.map((d) => ({ ...d })) : undefined,
               deviceStates: {
                 ...(base.deviceStates ?? {}),
-                [slotId]: { ...(base.deviceStates?.[slotId] ?? {}), screenshot: src },
+                [slotId]: { ...extraBase, screenshot: src },
               },
-            }),
-          );
+              textPos: base.textPos,
+              align: base.align,
+              font: base.font,
+              textColor: base.textColor,
+              titleScale: base.titleScale,
+              subtitleScale: base.subtitleScale,
+            });
+          });
           next.splice(index + 1, 0, ...extras);
         } else {
           // 单张或非第一台设备：只更新当前页
+          const slotBase = getDeviceState(base, slotId, slotIndex);
           next[index] = {
             ...base,
             deviceStates: {
               ...(base.deviceStates ?? {}),
-              [slotId]: { ...(base.deviceStates?.[slotId] ?? {}), screenshot: srcs[0] },
+              [slotId]: { ...slotBase, screenshot: srcs[0] },
             },
           };
         }
@@ -439,32 +504,6 @@ export default function App(): ReactNode {
       } else {
         showToast('截图已更新');
       }
-    } catch {
-      showToast('截图处理失败');
-    }
-  };
-
-  const uploadOverlayShot = async (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      showToast('请选择图片文件');
-      return;
-    }
-    if (file.size > 30 * 1024 * 1024) {
-      showToast('图片过大，请使用 30MB 以内的文件');
-      return;
-    }
-    const targetId = activeId;
-    try {
-      const src = await prepareImage(file, { maxDim: 3000, png: true });
-      setProject((prev) => ({
-        ...prev,
-        slides: prev.slides.map((s) =>
-          s.id === targetId && s.overlayDevice
-            ? { ...s, overlayDevice: { ...s.overlayDevice, screenshot: src } }
-            : s,
-        ),
-      }));
-      showToast('第二台设备截图已更新');
     } catch {
       showToast('截图处理失败');
     }
@@ -548,6 +587,14 @@ export default function App(): ReactNode {
     });
   };
 
+  const handleTextOffset = (offset: { x: number; y: number }) => {
+    patchActive({ textOffset: offset });
+  };
+
+  const handleTextAreaW = (areaW: number) => {
+    patchActive({ textAreaW: areaW });
+  };
+
   const scaleDevice = (slotId: string, scale: number) => {
     const index = resolveDevices(activeSlide, project).findIndex((s) => s.id === slotId);
     const base = getDeviceState(activeSlide, slotId, Math.max(0, index));
@@ -585,6 +632,8 @@ export default function App(): ReactNode {
           textColor: sourceText.textColor,
           titleScale: sourceText.titleScale,
           subtitleScale: sourceText.subtitleScale,
+          textOffset: sourceText.textOffset ? { ...sourceText.textOffset } : undefined,
+          textAreaW: sourceText.textAreaW,
           devices: sourceDevices.map((d) => ({ ...d })),
           deviceStates: newStates,
         };
@@ -602,38 +651,6 @@ export default function App(): ReactNode {
     }
   };
 
-  const moveOverlay = (x: number, y: number) => {
-    setProject((prev) => ({
-      ...prev,
-      slides: prev.slides.map((s) =>
-        s.id === activeId && s.overlayDevice
-          ? { ...s, overlayDevice: { ...s.overlayDevice, x, y } }
-          : s,
-      ),
-    }));
-  };
-
-  const scaleOverlay = (scale: number) => {
-    setProject((prev) => ({
-      ...prev,
-      slides: prev.slides.map((s) =>
-        s.id === activeId && s.overlayDevice
-          ? { ...s, overlayDevice: { ...s.overlayDevice, scale } }
-          : s,
-      ),
-    }));
-  };
-
-  const applyOverlayToAll = () => {
-    if (!activeSlide.overlayDevice) return;
-    const overlay = { ...activeSlide.overlayDevice };
-    setProject((prev) => ({
-      ...prev,
-      slides: prev.slides.map((s) => ({ ...s, overlayDevice: { ...overlay } })),
-    }));
-    showToast('叠加设备已应用到全部页面');
-  };
-
   const addSlide = () => {
     if (project.slides.length >= 10) {
       showToast('最多 10 页');
@@ -641,15 +658,19 @@ export default function App(): ReactNode {
     }
     const fresh = createSlide({
       bg: { ...activeSlide.bg },
-      fit: activeSlide.fit,
-      screenshot: activeSlide.screenshot,
       illustrations: activeSlide.illustrations.map((el) => ({ ...el, id: uid() })),
-      deviceX: activeSlide.deviceX ?? 0,
-      deviceY: activeSlide.deviceY ?? 0,
-      deviceScale: activeSlide.deviceScale ?? 1,
-      overlayDevice: activeSlide.overlayDevice
-        ? { ...activeSlide.overlayDevice }
+      devices: activeSlide.devices ? activeSlide.devices.map((d) => ({ ...d })) : undefined,
+      deviceStates: activeSlide.deviceStates
+        ? Object.fromEntries(
+            Object.entries(activeSlide.deviceStates).map(([k, v]) => [k, { ...v }]),
+          )
         : undefined,
+      textPos: activeSlide.textPos,
+      align: activeSlide.align,
+      font: activeSlide.font,
+      textColor: activeSlide.textColor,
+      titleScale: activeSlide.titleScale,
+      subtitleScale: activeSlide.subtitleScale,
     });
     const next = [...project.slides];
     next.splice(safeActive + 1, 0, fresh);
@@ -669,7 +690,6 @@ export default function App(): ReactNode {
       id: uid(),
       bg: { ...base.bg },
       illustrations: base.illustrations.map((el) => ({ ...el, id: uid() })),
-      overlayDevice: base.overlayDevice ? { ...base.overlayDevice } : undefined,
     };
     const next = [...project.slides];
     next.splice(index + 1, 0, copy);
@@ -763,6 +783,23 @@ export default function App(): ReactNode {
     }
   };
 
+  // 首屏加载门控：devices.json 未就绪前不渲染主界面，避免设备列表闪一下
+  if (customDevices === null) {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        background: '#0d1016',
+        color: '#6b7488',
+        fontSize: 14,
+      }}>
+        加载中…
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <Header
@@ -779,6 +816,7 @@ export default function App(): ReactNode {
         onRedo={redo}
         canUndo={canUndo()}
         canRedo={canRedo()}
+        onAI={() => setAiOpen(true)}
       />
 
       <div className="body">
@@ -798,8 +836,6 @@ export default function App(): ReactNode {
           onAddEmoji={addEmoji}
           onClearIllustrations={clearIllustrations}
           onImportDevice={() => setImporterOpen(true)}
-          onUploadOverlayShot={uploadOverlayShot}
-          onApplyOverlayToAll={applyOverlayToAll}
         />
 
         <main className="center">
@@ -812,9 +848,9 @@ export default function App(): ReactNode {
             onUpdate={updateIllustration}
             onDelete={deleteIllustration}
             onDeviceMove={moveDevice}
-            onOverlayMove={moveOverlay}
             onDeviceScale={scaleDevice}
-            onOverlayScale={scaleOverlay}
+            onTextOffset={handleTextOffset}
+            onTextAreaW={handleTextAreaW}
           />
           <SlideStrip
             project={project}
@@ -845,6 +881,14 @@ export default function App(): ReactNode {
         onClose={() => setImporterOpen(false)}
         onAdd={addCustomDevice}
         onToast={showToast}
+      />
+
+      <AIAgent
+        open={aiOpen}
+        onClose={() => setAiOpen(false)}
+        onApply={(updater) => setProject(updater)}
+        devices={devices}
+        project={project}
       />
 
       {toast ? <div className="toast">{toast}</div> : null}

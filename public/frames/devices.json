@@ -10,13 +10,34 @@
       "shadow": false
     },
     {
+      "id": "iphone15",
+      "name": "iPhone 15 Pro",
+      "note": "灵动岛 · 6.7″",
+      "frame": "island",
+      "ratio": 0.483
+    },
+    {
       "id": "smart-phone",
       "name": "Smart Phone",
       "note": "13.6 英寸",
       "image": "/frames/smart-phone.png",
       "screen": { "x": 28, "y": 16, "w": 478, "h": 1043, "radius": 40 },
       "mode": "under",
-      "shadow": false 
+      "shadow": false
+    },
+    {
+      "id": "none",
+      "name": "无边框",
+      "note": "纯截图卡片",
+      "frame": "none",
+      "ratio": 0.4613
+    },
+    {
+      "id": "ipad",
+      "name": "iPad Pro",
+      "note": "12.9″ 竖屏",
+      "frame": "ipad",
+      "ratio": 0.755
     },
     {
       "id": "mac-air",

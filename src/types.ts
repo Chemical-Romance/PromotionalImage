@@ -152,6 +152,10 @@ export interface Slide {
   textColor?: string;
   titleScale?: number;
   subtitleScale?: number;
+  /** 文字区域位置偏移（相对于 textPos 默认位置，单位：画布比例，如 0.05 = 5%） */
+  textOffset?: { x: number; y: number };
+  /** 文字区域宽度（side 布局时生效，默认 0.42 = 42% 画布宽） */
+  textAreaW?: number;
 }
 
 export interface Project {
@@ -164,5 +168,7 @@ export interface Project {
   textColor: string;
   titleScale: number;
   subtitleScale: number;
+  textOffset?: { x: number; y: number };
+  textAreaW?: number;
   slides: Slide[];
 }

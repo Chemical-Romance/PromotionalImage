@@ -17,6 +17,7 @@ export function Header({
   onRedo,
   canUndo,
   canRedo,
+  onAI,
 }: {
   project: Project;
   presetId: string;
@@ -31,6 +32,7 @@ export function Header({
   onRedo: () => void;
   canUndo: boolean;
   canRedo: boolean;
+  onAI: () => void;
 }): ReactNode {
   const count = project.slides.length;
 
@@ -101,6 +103,10 @@ export function Header({
       </div>
 
       <div className="header-actions">
+        <button type="button" className="btn ai-entry" onClick={onAI}>
+          <Icon name="sparkles" size={15} />
+          AI 智能体
+        </button>
         <button type="button" className="btn ghost" onClick={onSave}>
           <Icon name="save" size={15} />
           保存设置

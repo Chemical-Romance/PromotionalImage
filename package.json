@@ -1,5 +1,5 @@
 {
-  "name": "promo-studio",
+  "name": "promotional-image",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -17,6 +17,7 @@
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "dotenv": "^18.0.9",
     "typescript": "^5.5.4",
     "vite": "^5.4.2"
   }

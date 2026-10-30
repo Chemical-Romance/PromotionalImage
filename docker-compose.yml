@@ -1,0 +1,31 @@
+# promotional-image —— Docker Compose 编排
+# 服务器上：
+#   1. 先把 server/.env.example 复制成 server/.env 并填入真实 API Key
+#   2. docker compose up -d --build
+#
+# 两个服务：
+#   promotional-image-ai   —— Node.js AI 代理（持有 API Key，转发到 LLM 提供商）
+#   promotional-image      —— Nginx 静态站点（SPA + /api/ai 反代）
+
+services:
+  promotional-image-ai:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: promotional-image-ai
+    restart: unless-stopped
+    # API Key 只存在服务器 .env 里，不对外暴露端口
+    env_file:
+      - ./server/.env
+
+  promotional-image:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: promotional-image
+    restart: unless-stopped
+    # 8083 → 容器内 80，可按需改成 80/443
+    ports:
+      - "8083:80"
+    depends_on:
+      - promotional-image-ai

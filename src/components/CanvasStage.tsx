@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import type { DeviceDef, Illustration, Project, Slide } from '../types';
-import { drawScene, getDeviceLayouts, type DeviceLayout } from '../lib/draw';
+import { drawScene, getDeviceLayouts, computeTextLayout, type DeviceLayout } from '../lib/draw';
 import { slideFrameSources, slideImageSources } from '../lib/images';
 import { clamp } from '../lib/utils';
 import { useImageVersion } from '../hooks/useImageVersion';
@@ -33,7 +33,21 @@ interface DeviceScaleDrag {
   center: { x: number; y: number };
 }
 
-type DragState = IllustrationDrag | DeviceDrag | DeviceScaleDrag;
+type DragState = IllustrationDrag | DeviceDrag | DeviceScaleDrag | TextDrag | TextResizeDrag;
+
+interface TextDrag {
+  mode: 'text';
+  startTextOffset: { x: number; y: number };
+  start: { x: number; y: number };
+}
+
+interface TextResizeDrag {
+  mode: 'textResize';
+  startAreaW: number;
+  startX: number;
+  startPoint: { x: number; y: number };
+  edge: 'left' | 'right';
+}
 
 interface Rect {
   x: number;
@@ -55,6 +69,8 @@ export function CanvasStage({
   onDelete,
   onDeviceMove,
   onDeviceScale,
+  onTextOffset,
+  onTextAreaW,
 }: {
   project: Project;
   slide: Slide;
@@ -65,12 +81,15 @@ export function CanvasStage({
   onDelete: (id: string) => void;
   onDeviceMove: (slotId: string, x: number, y: number) => void;
   onDeviceScale: (slotId: string, scale: number) => void;
+  onTextOffset?: (offset: { x: number; y: number }) => void;
+  onTextAreaW?: (areaW: number) => void;
 }): ReactNode {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [selectedText, setSelectedText] = useState(false);
 
   const W = project.size.w;
   const H = project.size.h;
@@ -220,6 +239,25 @@ export function CanvasStage({
       return;
     }
 
+    if (drag.mode === 'text') {
+      const dx = (p.x - drag.start.x) / W;
+      const dy = (p.y - drag.start.y) / H;
+      onTextOffset?.({
+        x: clamp(drag.startTextOffset.x + dx, -0.5, 0.5),
+        y: clamp(drag.startTextOffset.y + dy, -0.5, 0.5),
+      });
+      return;
+    }
+
+    if (drag.mode === 'textResize') {
+      const deltaW = drag.edge === 'right'
+        ? (p.x - drag.startPoint.x) / W
+        : -(p.x - drag.startPoint.x) / W;
+      const next = clamp(drag.startAreaW + deltaW, 0.1, 0.9);
+      onTextAreaW?.(Math.round(next * 100) / 100);
+      return;
+    }
+
     if (drag.mode === 'scaleDevice') {
       const dist = Math.hypot(p.x - drag.center.x, p.y - drag.center.y);
       if (drag.startDist < 1) return;
@@ -330,6 +368,22 @@ export function CanvasStage({
     return () => window.removeEventListener('keydown', onKey);
   }, [selected, onDelete, onUpdate]);
 
+  // 当前文字 layout 和选框 rect（用于渲染选框）
+  const textLayout = (() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!ctx) return null;
+    return computeTextLayout(ctx, W, H, project, slide);
+  })();
+  const textRect = textLayout
+    ? {
+        x: textLayout.align === 'center' ? textLayout.x - textLayout.width / 2 : textLayout.x,
+        y: textLayout.y,
+        w: textLayout.width,
+        h: textLayout.height,
+      }
+    : null;
+
   const dispW = Math.round(W * scale);
   const dispH = Math.round(H * scale);
 
@@ -344,11 +398,40 @@ export function CanvasStage({
             viewBox={`0 0 ${W} ${H}`}
             onPointerDown={(e) => {
               const p = toDesign(e.clientX, e.clientY);
-              // Manual hit-test across ALL devices. Since device-hit rects have
-              // pointerEvents="none", every click lands here regardless of which
-              // visual device was under the cursor.
-              // Devices are drawn in layouts order, so the LAST hit is the one
-              // visually on top — iterate in reverse and take the first match.
+
+              // 1. 先检测文字区域
+              const canvas = canvasRef.current;
+              const ctx = canvas?.getContext('2d');
+              if (ctx && onTextOffset) {
+                const layout = computeTextLayout(ctx, W, H, project, slide);
+                if (layout) {
+                  // 选框 rect
+                  const textW = layout.width;
+                  const rectX = layout.align === 'center' ? layout.x - textW / 2 : layout.x;
+                  const textH = layout.height;
+                  if (
+                    p.x >= rectX - 4 &&
+                    p.x <= rectX + textW + 4 &&
+                    p.y >= layout.y - 4 &&
+                    p.y <= layout.y + textH + 4
+                  ) {
+                    e.preventDefault();
+                    setSelectedText(true);
+                    setSelectedSlotId(null);
+                    onSelect(null);
+                    const curOffset = slide.textOffset || { x: 0, y: 0 };
+                    dragRef.current = {
+                      mode: 'text',
+                      startTextOffset: { ...curOffset },
+                      start: p,
+                    };
+                    svgRef.current?.setPointerCapture(e.pointerId);
+                    return;
+                  }
+                }
+              }
+
+              // 2. 检测设备（从顶层到底层）
               let picked: DeviceLayout | undefined;
               for (let i = layouts.length - 1; i >= 0; i -= 1) {
                 const l = layouts[i];
@@ -363,14 +446,15 @@ export function CanvasStage({
                 }
               }
               if (!picked) {
-                // Empty click — deselect everything
                 onSelect(null);
                 setSelectedSlotId(null);
+                setSelectedText(false);
                 return;
               }
               e.preventDefault();
               setSelectedSlotId(picked.slot.id);
               onSelect(null);
+              setSelectedText(false);
               dragRef.current = {
                 mode: 'device',
                 slotId: picked.slot.id,
@@ -439,6 +523,30 @@ export function CanvasStage({
                 scale={scale}
                 label={selectedLayout.model.name}
                 onScaleDown={(e) => onScaleDown(e, selectedLayout)}
+              />
+            ) : null}
+
+            {selectedText && textRect && onTextAreaW ? (
+              <TextHandles
+                rect={textRect}
+                scale={scale}
+                onResizeStart={(e, edge) => {
+                  const p = toDesign(e.clientX, e.clientY);
+                  const canvas = canvasRef.current;
+                  const ctx = canvas?.getContext('2d');
+                  // 从 layout 反推实际生效的 areaW，避免默认值漂移
+                  const baseAreaW = ctx
+                    ? computeTextLayout(ctx, W, H, project, slide)?.width ?? W * 0.84
+                    : W * 0.84;
+                  dragRef.current = {
+                    mode: 'textResize',
+                    startAreaW: baseAreaW / W,
+                    startX: p.x,
+                    startPoint: p,
+                    edge,
+                  };
+                  svgRef.current?.setPointerCapture(e.pointerId);
+                }}
               />
             ) : null}
           </svg>
@@ -549,6 +657,106 @@ function SelectionHandles({
         vectorEffect="non-scaling-stroke"
         pointerEvents="none"
       />
+    </g>
+  );
+}
+
+function TextHandles({
+  rect,
+  scale,
+  onResizeStart,
+}: {
+  rect: { x: number; y: number; w: number; h: number };
+  scale: number;
+  onResizeStart: (e: ReactPointerEvent, edge: 'left' | 'right') => void;
+}): ReactNode {
+  const handleR = 6 / scale;
+  const hitR = 14 / scale;
+  return (
+    <g>
+      {/* 虚线选框 */}
+      <rect
+        x={rect.x}
+        y={rect.y}
+        width={rect.w}
+        height={rect.h}
+        fill="none"
+        stroke="#8b93ff"
+        strokeWidth={1.5}
+        strokeDasharray="7 5"
+        vectorEffect="non-scaling-stroke"
+        pointerEvents="none"
+      />
+      {/* 左边缘 resize */}
+      <g>
+        <circle
+          cx={rect.x}
+          cy={rect.y + rect.h / 2}
+          r={hitR}
+          fill="rgba(0,0,0,0)"
+          pointerEvents="all"
+          style={{ cursor: 'ew-resize' }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            onResizeStart(e, 'left');
+          }}
+        />
+        <line
+          x1={rect.x}
+          y1={rect.y + rect.h / 2 - 12 / scale}
+          x2={rect.x}
+          y2={rect.y + rect.h / 2 + 12 / scale}
+          stroke="#6c74ff"
+          strokeWidth={2}
+          vectorEffect="non-scaling-stroke"
+          pointerEvents="none"
+        />
+        <circle
+          cx={rect.x}
+          cy={rect.y + rect.h / 2}
+          r={handleR}
+          fill="#ffffff"
+          stroke="#6c74ff"
+          strokeWidth={1.5}
+          vectorEffect="non-scaling-stroke"
+          pointerEvents="none"
+        />
+      </g>
+      {/* 右边缘 resize */}
+      <g>
+        <circle
+          cx={rect.x + rect.w}
+          cy={rect.y + rect.h / 2}
+          r={hitR}
+          fill="rgba(0,0,0,0)"
+          pointerEvents="all"
+          style={{ cursor: 'ew-resize' }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            onResizeStart(e, 'right');
+          }}
+        />
+        <line
+          x1={rect.x + rect.w}
+          y1={rect.y + rect.h / 2 - 12 / scale}
+          x2={rect.x + rect.w}
+          y2={rect.y + rect.h / 2 + 12 / scale}
+          stroke="#6c74ff"
+          strokeWidth={2}
+          vectorEffect="non-scaling-stroke"
+          pointerEvents="none"
+        />
+        <circle
+          cx={rect.x + rect.w}
+          cy={rect.y + rect.h / 2}
+          r={handleR}
+          fill="#ffffff"
+          stroke="#6c74ff"
+          strokeWidth={1.5}
+          vectorEffect="non-scaling-stroke"
+          pointerEvents="none"
+        />
+      </g>
     </g>
   );
 }
